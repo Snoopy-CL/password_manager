@@ -5,20 +5,48 @@ import platform
 import secrets
 import sqlite3
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+import base64
+import getpass
 
-# change to master password and salt (dynamic encryption) instead of single encryption key. Ask master password to use program.
-def load_key():
-    try:
-        with open('kevin.txt', 'rb') as key_file:
-            return key_file.read()
-    except FileNotFoundError:
-        key = Fernet.generate_key()
-        with open('kevin.txt', 'wb') as key_file:
-            key_file.write(key)
-        return key
+fernet = None
 
-KEY = load_key()
-fernet = Fernet(KEY)
+def create_key(password, salt):
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=390000,
+        backend=default_backend()
+    )
+    return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+
+def ask_master_password():
+    salt = b''
+    salt_file = 'salt.bin'
+    if not os.path.exists(salt_file):
+        print("First time setup.")
+        while True:
+            password = input("Create Master Password: ")
+            confirm = input("Confirm Master Password: ")
+            if password != confirm:
+                print("Passwords do not match. Try again.")
+            else:
+                break
+
+        salt = os.urandom(16)
+        with open(salt_file, 'wb') as f:
+            f.write(salt)
+        print("Master password set successfully.")
+    else:
+        password = getpass.getpass("Enter Master Password: ")
+        with open(salt_file, 'rb') as f:
+            salt = f.read()
+
+    key = create_key(password, salt)
+    return Fernet(key)
 
 def sql_database():
     conn = sqlite3.connect('info.db')
@@ -159,7 +187,11 @@ def return_to_beginning():
     check_os()
     main()
 
+
 def main():
+    global fernet
+    check_os()
+    fernet = ask_master_password()
     sql_database()
 
     while True:
@@ -183,12 +215,10 @@ def main():
                 username = input('Enter the username: ')
                 password = generate_password(length=15)
                 storage(app, username, password)
-                break
         elif action == 'recall':
             recall_login()
         elif action == 'delete':
             delete_account()
-            break
         else:
             print('Action Unknown, Please Selected One of the Options')
 
