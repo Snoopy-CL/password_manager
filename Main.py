@@ -1,6 +1,5 @@
-#google drive API download then upload
-
 import os
+import sys
 import platform
 import secrets
 import sqlite3
@@ -10,9 +9,71 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import base64
 import getpass
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.http import MediaFileUpload
+
+# Creates an option to back up info.db to google drive
+def cloud_backup():
+    CLIENT_SECRET_FILE = 'client-secret.json'
+    TOKEN_FILE = 'token.json'
+    API_NAME = 'drive'
+    API_VERSION = 'v3'
+    SCOPES = ['https://www.googleapis.com/auth/drive']
+
+    creds = None
+
+    # Check if token exists which contains users credentials and refresh tokens.
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
+    # refresh tokens if needed. if no valid token, then start up OAuth2 and open local server for login
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
+
+    # Build service object for google api with credentials
+    service = build(API_NAME, API_VERSION, credentials=creds)
+    # Enter the url code after the "/" when entered into the folder you wish to upload to in google drive
+    folder_id = ''
+
+    # locate the info.db file
+    base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    # files to upload to google drive, can put more if needed
+    file_names = ['info.db']
+    mime_types = ['application/octet-stream']
+
+    # joins file name and mime type, sets name and uploads to google drive
+    for file_name, mime_type in zip(file_names, mime_types):
+        file_path = os.path.join(base_dir, file_name)
+        if not os.path.exists(file_path):
+            print(f'File not found: {file_path}')
+            continue
+
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+
+        media = MediaFileUpload(file_path, mimetype=mime_type)
+
+        service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id'
+        ).execute()
 
 fernet = None
 
+# Creates key derivation function
 def create_key(password, salt):
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
@@ -23,6 +84,7 @@ def create_key(password, salt):
     )
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
+# asks for master password. if its first time running program, asks to set password and creates salt file
 def ask_master_password():
     salt = b''
     salt_file = 'salt.bin'
@@ -41,6 +103,7 @@ def ask_master_password():
             f.write(salt)
         print("Master password set successfully.")
     else:
+        # If you want to run on code editor, need to change getpass.getpass to input.
         password = getpass.getpass("Enter Master Password: ")
         with open(salt_file, 'rb') as f:
             salt = f.read()
@@ -48,6 +111,7 @@ def ask_master_password():
     key = create_key(password, salt)
     return Fernet(key)
 
+# Creates basic structure of sqlite database file called info.db
 def sql_database():
     conn = sqlite3.connect('info.db')
     cursor = conn.cursor()
@@ -63,6 +127,7 @@ def sql_database():
     conn.commit()
     conn.close()
 
+# Uses info.db to store logins with encryption and specify what components to include in the file
 def storage(app, username, password):
     conn = sqlite3.connect('info.db')
     cursor = conn.cursor()
@@ -83,6 +148,7 @@ def storage(app, username, password):
     finally:
         conn.close()
 
+# Checks if login currently exists for an app
 def check_if_exists(app):
     app = app.strip().lower()
     conn = sqlite3.connect('info.db')
@@ -95,6 +161,16 @@ def check_if_exists(app):
         return True, result
     else:
         return False, None
+
+# Checks if the info.db file is empty
+def check_if_empty():
+    conn = sqlite3.connect('info.db')
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT EXISTS(SELECT 1 FROM info LIMIT 1)')
+    exists = cursor.fetchone()[0]
+    conn.close()
+    return exists == 0
 
 def generate_password(length=15):
     letters_cap = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -114,9 +190,9 @@ def generate_password(length=15):
 
     secrets.SystemRandom().shuffle(password)
     final_password = ''.join(password)
-    print(final_password)
     return final_password
 
+# Returns the app name of all the saved logins. Allows user to select or check if wanted login is present.
 def recall_login():
     conn = sqlite3.connect('info.db')
     cursor = conn.cursor()
@@ -145,6 +221,7 @@ def recall_login():
         print('Invalid app name or does not exist, please try again.')
         return False, None
 
+# Deletes a saved login previously made
 def delete_account():
     conn = sqlite3.connect('info.db')
     cursor = conn.cursor()
@@ -173,27 +250,32 @@ def delete_account():
             conn.close()
         return True
 
+# Clears the output depending on the os for security
 def check_os():
     if platform.system() == 'Windows':
         os.system('cls')
     else:
         os.system('clear')
 
+# Exits program and clears output
 def clean_and_exit():
     check_os()
     print('Exiting Securely')
 
+# Returns to the beginning of program incase user needs to do further actions
 def return_to_beginning():
     check_os()
     main()
 
-
+#Main body of program
 def main():
+    # Access database and asks user for master password to begin using program
     global fernet
     check_os()
     fernet = ask_master_password()
     sql_database()
 
+    # Gives options to generate a password, recall all the app names of all logins saved, and option to delete previously made login
     while True:
         action = input('Would you like to generate a password or recall a login or Delete an account?\n(Generate or Recall or Delete): ').strip().lower()
         if action == 'generate':
@@ -214,19 +296,38 @@ def main():
             else:
                 username = input('Enter the username: ')
                 password = generate_password(length=15)
+                print(f'The generated password is: {password}')
                 storage(app, username, password)
+                break
         elif action == 'recall':
-            recall_login()
+            if check_if_empty():
+                print('No data was found. You must save an account first.')
+            else:
+                recall_login()
+            break
         elif action == 'delete':
-            delete_account()
+            if check_if_empty():
+                print('No data was found. You must save an account first.')
+            else:
+                delete_account()
+            break
         else:
             print('Action Unknown, Please Selected One of the Options')
 
+    # Gives option to return to the beginning of program to do more actions or exit the program.
+    # If decided to exit, gives option to backup database of passwords to google drive if wanted.
     while True:
         outro = input('Return to Beginning or Exit?(Return or Exit): ').lower()
         if outro == 'exit':
-            clean_and_exit()
-            break
+            update = input('Would you like to update the cloud before you exit? (y/n): ').strip().lower()
+            if update == 'y':
+                cloud_backup()
+                print('File has been backed up to google drive.')
+                clean_and_exit()
+                break
+            else:
+                clean_and_exit()
+                break
         if outro == 'return':
             return_to_beginning()
             break

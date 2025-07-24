@@ -1,2 +1,6 @@
 .env
 info.db
+Temporary master password.txt
+salt.bin
+client-secret.json
+token.json
